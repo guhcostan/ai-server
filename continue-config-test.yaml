@@ -1,0 +1,28 @@
+name: "Continue Vertex AI Test"
+version: "1.0"
+schema: "1"
+
+models:
+  - title: "Gemini 1.5 Flash (Vertex AI)"
+    provider: "openai"
+    model: "gemini-1.5-flash"
+    apiBase: "http://localhost:5001/v1"
+    apiKey: "test-key"
+    roles: ["chat"]
+    
+  - title: "Gemini 1.5 Pro (Vertex AI)"
+    provider: "openai"
+    model: "gemini-1.5-pro"
+    apiBase: "http://localhost:5001/v1"
+    apiKey: "test-key"
+    roles: ["chat"]
+
+contextProviders:
+  - name: "files"
+    
+rules:
+  - "Keep responses concise and helpful"
+  
+customCommands:
+  - name: "test"
+    prompt: "Respond with 'Hello from Vertex AI!'" 

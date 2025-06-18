@@ -1,0 +1,11 @@
+name: "Continue Vertex AI IPv4"
+version: "1.0"
+schema: "1"
+
+models:
+  - title: "Gemini 1.5 Flash (Vertex AI)"
+    provider: "openai"
+    model: "gemini-1.5-flash"
+    apiBase: "http://127.0.0.1:5001/v1"
+    apiKey: "test-key"
+    roles: ["chat"] 

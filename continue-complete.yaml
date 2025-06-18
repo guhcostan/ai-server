@@ -1,0 +1,214 @@
+%YAML 1.1
+---
+name: "Continue + AI Models Complete"
+version: "2.0.0"
+
+# Multi-provider configuration with all requested models
+models:
+  # === GOOGLE MODELS (via Vertex AI) ===
+  
+  # Google Gemini 2.5 Models (Latest - if available in Vertex AI)
+  - name: "Gemini 2.5 Flash ⚡"
+    provider: "openai"
+    model: "gemini-2.5-flash"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+    
+  - name: "Gemini 2.5 Pro 🚀"
+    provider: "openai"
+    model: "gemini-2.5-pro"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+
+  # Google Gemini 2.0 Models (Current Latest)
+  - name: "Gemini 2.0 Flash ⚡"
+    provider: "openai"
+    model: "gemini-2.0-flash"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+    
+  - name: "Gemini 2.0 Pro 🚀"
+    provider: "openai"
+    model: "gemini-2.0-pro"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+
+  # Google Gemini 1.5 Models (Stable)
+  - name: "Gemini 1.5 Flash ⚡"
+    provider: "openai"
+    model: "gemini-1.5-flash"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+    
+  - name: "Gemini 1.5 Pro 🧠"
+    provider: "openai"
+    model: "gemini-1.5-pro"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+
+  # Google Legacy/Specialized Models
+  - name: "Gemini Pro (Legacy) 📚"
+    provider: "openai"
+    model: "gemini-pro"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+    
+  - name: "Code Bison 💻"
+    provider: "openai"
+    model: "code-bison"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+    
+  - name: "Text Bison 📝"
+    provider: "openai"
+    model: "text-bison"
+    apiKey: "sk-vertex-ai"
+    apiBase: "http://localhost:5001/v1"
+
+  # === ANTHROPIC MODELS ===
+  
+  - name: "Claude 3.5 Sonnet 🎭"
+    provider: "anthropic"
+    model: "claude-3-5-sonnet-20241022"
+    apiKey: "${ANTHROPIC_API_KEY}"
+    
+  - name: "Claude 3.7 Sonnet 🎭"
+    provider: "anthropic"
+    model: "claude-3-7-sonnet-20241022"
+    apiKey: "${ANTHROPIC_API_KEY}"
+    
+  - name: "Claude 4 Opus 🎭"
+    provider: "anthropic"
+    model: "claude-4-opus-20241022"
+    apiKey: "${ANTHROPIC_API_KEY}"
+    
+  - name: "Claude 4 Sonnet 🎭"
+    provider: "anthropic"
+    model: "claude-4-sonnet-20241022"
+    apiKey: "${ANTHROPIC_API_KEY}"
+
+  # === OPENAI MODELS ===
+  
+  - name: "GPT-4.1 🤖"
+    provider: "openai"
+    model: "gpt-4.1"
+    apiKey: "${OPENAI_API_KEY}"
+    
+  - name: "GPT-4o 🤖"
+    provider: "openai"
+    model: "gpt-4o"
+    apiKey: "${OPENAI_API_KEY}"
+    
+  - name: "o3 🧠"
+    provider: "openai"
+    model: "o3"
+    apiKey: "${OPENAI_API_KEY}"
+    
+  - name: "o4-mini 🧠"
+    provider: "openai"
+    model: "o4-mini"
+    apiKey: "${OPENAI_API_KEY}"
+
+  # === XAI MODELS ===
+  
+  - name: "Grok 3 Beta 🚀"
+    provider: "openai"
+    model: "grok-3-beta"
+    apiKey: "${XAI_API_KEY}"
+    apiBase: "https://api.x.ai/v1"
+    
+  - name: "Grok 3 Mini 🚀"
+    provider: "openai"
+    model: "grok-3-mini"
+    apiKey: "${XAI_API_KEY}"
+    apiBase: "https://api.x.ai/v1"
+
+# Context Providers
+contextProviders:
+  - name: "code"
+  - name: "diff"
+  - name: "open"
+  - name: "folder"
+  - name: "terminal"
+  - name: "problems"
+  - name: "git"
+
+# Custom Rules
+rules:
+  - "Always include explanatory comments in complex code"
+  - "Use descriptive variable names in English"
+  - "Prefer simple and readable solutions"
+  - "Include error handling when appropriate"
+  - "Suggest performance improvements when relevant"
+  - "Maintain consistency with existing project style"
+  - "Follow security best practices"
+  - "Write testable code"
+
+# Custom Commands
+customCommands:
+  - name: "explain"
+    prompt: "Explain the selected code in detail, including: 1) What it does, 2) How it works, 3) Possible improvements"
+    description: "Detailed code explanation"
+    
+  - name: "optimize"
+    prompt: "Analyze the selected code and suggest optimizations for performance, readability, and maintainability"
+    description: "Optimization suggestions"
+    
+  - name: "test"
+    prompt: "Create comprehensive unit tests for the selected code, including edge cases and error scenarios"
+    description: "Test generation"
+    
+  - name: "document"
+    prompt: "Create complete documentation for the selected code, including JSDoc/docstrings, README if necessary"
+    description: "Automatic documentation"
+    
+  - name: "refactor"
+    prompt: "Refactor the selected code following best practices: clean code, SOLID principles, appropriate design patterns"
+    description: "Intelligent refactoring"
+    
+  - name: "debug"
+    prompt: "Analyze the code to identify possible bugs, logic issues, or robustness improvements"
+    description: "Bug analysis"
+    
+  - name: "security"
+    prompt: "Review the selected code for security vulnerabilities and suggest improvements"
+    description: "Security review"
+    
+  - name: "translate"
+    prompt: "Translate the selected code to another programming language while maintaining functionality"
+    description: "Code translation"
+
+# Custom System Message
+systemMessage: |
+  You are a specialized programming assistant focused on:
+  
+  1. **Clean Code**: Write readable, well-structured, and documented code
+  2. **Best Practices**: Follow industry standards and SOLID principles
+  3. **Security**: Always consider security aspects in code
+  4. **Performance**: Optimize when necessary, but prioritize readability
+  5. **Maintainability**: Code should be easy to maintain and extend
+  6. **Testing**: Suggest and write comprehensive tests
+  7. **Documentation**: Provide clear documentation and comments
+  
+  Always explain your decisions and suggest alternatives when appropriate.
+  When working in agent mode, break down complex tasks into manageable steps.
+
+# Slash Commands for Agent Mode
+slashCommands:
+  - name: "analyze"
+    description: "Analyze the current codebase structure"
+    
+  - name: "implement"
+    description: "Implement a feature based on description"
+    
+  - name: "fix"
+    description: "Fix bugs or issues in the code"
+    
+  - name: "optimize"
+    description: "Optimize code performance"
+    
+  - name: "deploy"
+    description: "Help with deployment tasks"
+    
+  - name: "setup"
+    description: "Set up project dependencies and configuration" 

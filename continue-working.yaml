@@ -1,0 +1,10 @@
+name: "Continue Vertex AI Working"
+version: "1.0"
+schema: "1"
+
+models:
+  - title: "Gemini 1.5 Flash (Vertex AI)"
+    provider: "openai"
+    model: "gemini-1.5-flash"
+    apiBase: "http://localhost:5001/v1"
+    apiKey: "test-key" 
