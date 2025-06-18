@@ -141,12 +141,24 @@ router.post("/v1/chat/completions", async (req, res) => {
       try {
         let fullText = '';
         for await (const chunk of result.stream) {
-          const chunkText = chunk.text();
-          if (chunkText) {
-            fullText += chunkText;
+          // Get text from chunk - handle different response formats
+          let text = '';
+          if (typeof chunk.text === 'function') {
+            text = chunk.text();
+          } else if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
+            const candidate = chunk.candidates[0];
+            if (candidate.content.parts && candidate.content.parts[0]) {
+              text = candidate.content.parts[0].text || '';
+            }
+          } else if (chunk.text) {
+            text = chunk.text;
+          }
+          
+          if (text) {
+            fullText += text;
             
             // Split into words for more natural streaming
-            const words = chunkText.split(' ');
+            const words = text.split(' ');
             for (let i = 0; i < words.length; i++) {
               const word = words[i] + (i < words.length - 1 ? ' ' : '');
               
@@ -379,7 +391,19 @@ router.post('/chat/completions', async (req, res) => {
       if (provider === 'google') {
         // Handle Google/Vertex AI streaming
         for await (const chunk of result.stream) {
-          const text = chunk.text();
+          // Get text from chunk - handle different response formats
+          let text = '';
+          if (typeof chunk.text === 'function') {
+            text = chunk.text();
+          } else if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
+            const candidate = chunk.candidates[0];
+            if (candidate.content.parts && candidate.content.parts[0]) {
+              text = candidate.content.parts[0].text || '';
+            }
+          } else if (chunk.text) {
+            text = chunk.text;
+          }
+          
           if (text) {
             const streamChunk = {
               id: `chatcmpl-${Date.now()}`,
@@ -400,7 +424,14 @@ router.post('/chat/completions', async (req, res) => {
       } else {
         // Handle third-party streaming (mock implementation)
         for await (const chunk of result.stream) {
-          const text = chunk.text();
+          // Get text from chunk
+          let text = '';
+          if (typeof chunk.text === 'function') {
+            text = chunk.text();
+          } else if (chunk.text) {
+            text = chunk.text;
+          }
+          
           if (text) {
             const streamChunk = {
               id: `chatcmpl-${Date.now()}`,

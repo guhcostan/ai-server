@@ -6,5 +6,5 @@ models:
   - title: "Test Gemini"
     provider: "openai"
     model: "gemini-1.5-flash"
-    apiBase: "http://localhost:5001/v1"
-    apiKey: "test" 
+    apiBase: "http://localhost:3000/v1"
+    apiKey: "sk-vertex-ai" 
