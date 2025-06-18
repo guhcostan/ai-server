@@ -3,7 +3,7 @@ import logger from '../config/logger.js';
 import { getModelProvider, getAllModels } from '../config/models.js';
 import vertexService from '../services/vertexService.js';
 import authService from '../services/auth.js';
-import { validateMessages } from '../utils/messageUtils.js';
+import { validateMessages, cleanOrphanedToolMessages } from '../utils/messageUtils.js';
 
 const router = express.Router();
 
@@ -70,6 +70,9 @@ router.post("/chat/completions", async (req, res) => {
       });
     }
 
+    // Clean orphaned tool messages before processing
+    const cleanedMessages = cleanOrphanedToolMessages(messages);
+
     if (!model) {
       return res.status(400).json({ 
         error: { 
@@ -121,6 +124,7 @@ router.post("/chat/completions", async (req, res) => {
       model,
       provider,
       messageCount: messages.length,
+      cleanedMessageCount: cleanedMessages.length,
       temperature,
       maxTokens: max_tokens,
       stream,
@@ -133,7 +137,7 @@ router.post("/chat/completions", async (req, res) => {
 
     // Route to appropriate service - all models use Vertex AI as unified gateway
     const result = await vertexService.generateChatCompletion({
-      model, messages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
+      model, messages: cleanedMessages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
     });
 
     console.log("🔍 DEBUG: VertexService returned:", {

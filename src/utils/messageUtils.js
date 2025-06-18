@@ -304,6 +304,10 @@ export function validateMessages(messages) {
     throw new Error('Messages array cannot be empty');
   }
 
+  // Track tool calls and their responses for validation
+  const toolCalls = new Map(); // id -> tool call
+  const toolResponses = new Map(); // tool_call_id -> response
+
   for (const message of messages) {
     if (!message.role) {
       throw new Error('Each message must have a role property');
@@ -321,8 +325,16 @@ export function validateMessages(messages) {
         throw new Error('Tool messages must have content');
       }
       if (!message.tool_call_id) {
-        throw new Error('Tool messages must have tool_call_id');
+        logger.warn('Tool message missing tool_call_id, assigning default', {
+          content: message.content.substring(0, 100)
+        });
+        // Assign a default tool_call_id if missing
+        message.tool_call_id = `default_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       }
+      
+      // Track tool response
+      toolResponses.set(message.tool_call_id, message);
+      
     } else if (message.role === 'assistant' && message.tool_calls) {
       // Assistant messages with tool calls
       if (!Array.isArray(message.tool_calls)) {
@@ -341,6 +353,9 @@ export function validateMessages(messages) {
         if (!toolCall.function.name) {
           throw new Error('Function tool calls must have a name');
         }
+        
+        // Track tool call
+        toolCalls.set(toolCall.id, toolCall);
       }
       
       // Content is optional for tool calls
@@ -357,7 +372,74 @@ export function validateMessages(messages) {
     }
   }
 
+  // Validate tool call/response matching
+  for (const [toolCallId, toolResponse] of toolResponses) {
+    if (!toolCalls.has(toolCallId)) {
+      logger.warn('Tool response found without matching tool call', {
+        toolCallId,
+        availableToolCalls: Array.from(toolCalls.keys()),
+        responseContent: toolResponse.content.substring(0, 100)
+      });
+      
+      // Don't throw error, just log warning - Continue might be sending orphaned responses
+      // This is a common issue with Continue Agent Mode
+    }
+  }
+
+  // Log validation summary
+  logger.debug('Message validation completed', {
+    totalMessages: messages.length,
+    toolCalls: toolCalls.size,
+    toolResponses: toolResponses.size,
+    orphanedResponses: Array.from(toolResponses.keys()).filter(id => !toolCalls.has(id)).length
+  });
+
   return true;
+}
+
+/**
+ * Clean orphaned tool messages that don't have matching tool calls
+ * This fixes the "no tool call found to match tool output" error
+ */
+export function cleanOrphanedToolMessages(messages) {
+  const toolCalls = new Map();
+  const cleanedMessages = [];
+
+  // First pass: collect all tool calls
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.tool_calls) {
+      for (const toolCall of message.tool_calls) {
+        toolCalls.set(toolCall.id, toolCall);
+      }
+    }
+  }
+
+  // Second pass: filter out orphaned tool responses
+  for (const message of messages) {
+    if (message.role === 'tool') {
+      if (toolCalls.has(message.tool_call_id)) {
+        cleanedMessages.push(message);
+      } else {
+        logger.warn('Removing orphaned tool message', {
+          toolCallId: message.tool_call_id,
+          content: message.content.substring(0, 100),
+          availableToolCalls: Array.from(toolCalls.keys())
+        });
+      }
+    } else {
+      cleanedMessages.push(message);
+    }
+  }
+
+  if (cleanedMessages.length !== messages.length) {
+    logger.info('Cleaned orphaned tool messages', {
+      originalCount: messages.length,
+      cleanedCount: cleanedMessages.length,
+      removedCount: messages.length - cleanedMessages.length
+    });
+  }
+
+  return cleanedMessages;
 }
 
 /**
@@ -387,6 +469,7 @@ export default {
   processMessagesForVertexAI,
   processMessagesForThirdParty,
   validateMessages,
+  cleanOrphanedToolMessages,
   getLastUserMessage,
   estimateTokenCount
 }; 
