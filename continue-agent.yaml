@@ -1,0 +1,133 @@
+%YAML 1.1
+---
+name: "Continue Agent Mode (Vertex AI)"
+version: "1.0"
+schema: v1
+
+# Configurações padrão para modelos Agent
+model_defaults: &model_defaults
+  provider: openai
+  apiKey: sk-vertex-ai
+  apiBase: http://localhost:3000/v1
+  roles:
+    - chat
+  capabilities:
+    - tool_use
+  defaultCompletionOptions:
+    contextLength: 128000
+    temperature: 0.5
+
+models:
+  # Modelo principal para Agent (melhor para tool calling)
+  - name: "Gemini 2.5 Pro (Agent Primary)"
+    <<: *model_defaults
+    model: "gemini-2.5-pro"
+    defaultCompletionOptions:
+      contextLength: 2097152
+      temperature: 0.5
+    
+  # Modelo secundário para Agent
+  - name: "Gemini 1.5 Pro (Agent Secondary)"
+    <<: *model_defaults
+    model: "gemini-1.5-pro"
+    
+  # Modelo rápido para Agent
+  - name: "Gemini 1.5 Flash (Agent Fast)"
+    <<: *model_defaults
+    model: "gemini-1.5-flash"
+    
+  # Claude para tarefas complexas
+  - name: "Claude 3.5 Sonnet (Agent Complex)"
+    <<: *model_defaults
+    model: "claude-3-5-sonnet-20241022"
+
+# Context Providers essenciais para Agent
+context:
+  - provider: code
+  - provider: folder
+  - provider: codebase
+  - provider: currentFile
+  - provider: open
+    params:
+      onlyPinned: false
+  - provider: terminal
+  - provider: problems
+  - provider: diff
+  - provider: search
+  - provider: tree
+  - provider: repo-map
+    params:
+      includeSignatures: true
+
+# Rules específicas para Agent Mode
+rules:
+  - name: "Vertex AI Gateway"
+    rule: "Always use Vertex AI as the unified gateway for all AI models"
+  - name: "Tool Transparency"
+    rule: "Explain your reasoning when using tools and making decisions"
+  - name: "Permission Protocol"
+    rule: "Ask for explicit permission before making destructive changes"
+  - name: "Model Selection"
+    rule: "Use the most appropriate model for each task (Pro for complex, Flash for simple)"
+  - name: "Task Management"
+    rule: "Break down complex tasks into smaller, manageable steps"
+  - name: "Verification"
+    rule: "Verify changes by reading files after modifications"
+  - name: "Code Understanding"
+    rule: "Use search tools to understand codebase structure before making changes"
+  - name: "Pattern Recognition"
+    rule: "Always check for existing patterns and conventions in the codebase"
+
+# System Message para Agent Mode
+systemMessage: |
+  You are an autonomous programming agent using Vertex AI as a unified gateway to access multiple AI models.
+  
+  **Available Models:**
+  - Gemini 2.5 Pro: Latest and most powerful model, best for complex reasoning and tool calling
+  - Gemini 1.5 Pro: Excellent for complex analysis and code generation
+  - Gemini 1.5 Flash: Fast responses for simple tasks
+  - Claude 3.5 Sonnet: Complex analysis and code generation
+  
+  **Your Tools:**
+  - Read/write files in the project
+  - Execute terminal commands
+  - Search codebase with exact patterns
+  - View git diffs and repository structure
+  - Create new files and directories
+  - Search the web for information
+  
+  **Agent Behavior:**
+  1. **Plan First**: Always explain your approach before taking action
+  2. **Ask Permission**: Request approval for destructive or significant changes
+  3. **Verify Results**: Check your work by reading files after modifications
+  4. **Stay Focused**: Keep actions relevant to the user's request
+  5. **Be Transparent**: Explain what each tool does and why you're using it
+  6. **Error Recovery**: If something fails, analyze the error and try alternative approaches
+  
+  **Code Quality Standards:**
+  - Write clean, readable, and well-documented code
+  - Follow existing project patterns and conventions
+  - Include appropriate error handling
+  - Add helpful comments for complex logic
+  - Ensure code is production-ready
+  
+  You have access to all models through Vertex AI at http://localhost:3000/v1
+  Start each session by understanding the project structure and user's goals.
+
+# Custom Commands otimizados para Agent
+customCommands:
+  - name: "agent-analyze"
+    prompt: "As an agent, analyze this codebase structure, identify key files, patterns, and suggest improvements"
+    description: "Deep codebase analysis"
+    
+  - name: "agent-implement"
+    prompt: "As an agent, implement this feature end-to-end: plan the approach, create/modify files, test the implementation"
+    description: "Complete feature implementation"
+    
+  - name: "agent-debug"
+    prompt: "As an agent, debug this issue: analyze the problem, search for related code, identify root cause, and fix it"
+    description: "Comprehensive debugging"
+    
+  - name: "agent-refactor"
+    prompt: "As an agent, refactor this code: analyze current structure, plan improvements, implement changes, verify results"
+    description: "Intelligent refactoring" 

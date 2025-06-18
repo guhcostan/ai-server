@@ -19,7 +19,7 @@ router.get('/health', (req, res) => {
 });
 
 // List of available models
-router.get('/v1/models', (req, res) => {
+router.get('/models', (req, res) => {
   const models = getAllModels();
   res.json({
     object: 'list',
@@ -28,10 +28,20 @@ router.get('/v1/models', (req, res) => {
 });
 
 // Main endpoint for chat completions (OpenAI API compatible)
-router.post("/v1/chat/completions", async (req, res) => {
+router.post("/chat/completions", async (req, res) => {
   const startTime = Date.now();
   
+  console.log("🔍 DEBUG: Endpoint called with tools:", req.body.tools ? "YES" : "NO");
+  
   try {
+    // Log the entire request body for debugging
+    logger.info('Raw request body received', {
+      bodyKeys: Object.keys(req.body),
+      hasTools: 'tools' in req.body,
+      toolsType: typeof req.body.tools,
+      toolsValue: req.body.tools ? JSON.stringify(req.body.tools).substring(0, 200) : 'none'
+    });
+    
     const { 
       messages, 
       model, 
@@ -39,7 +49,9 @@ router.post("/v1/chat/completions", async (req, res) => {
       max_tokens = 2048,
       top_p = 1,
       top_k = 40,
-      stream = false
+      stream = false,
+      tools = null,
+      tool_choice = null
     } = req.body;
 
     // Basic validation
@@ -56,6 +68,26 @@ router.post("/v1/chat/completions", async (req, res) => {
       return res.status(400).json({ 
         error: { 
           message: "Model parameter is required",
+          type: "invalid_request_error"
+        }
+      });
+    }
+
+    // Validate tools if provided
+    if (tools && !Array.isArray(tools)) {
+      return res.status(400).json({ 
+        error: { 
+          message: "Tools must be an array",
+          type: "invalid_request_error"
+        }
+      });
+    }
+
+    // Validate tool_choice if provided
+    if (tool_choice && tools && tools.length === 0) {
+      return res.status(400).json({ 
+        error: { 
+          message: "tool_choice requires tools to be provided",
           type: "invalid_request_error"
         }
       });
@@ -78,7 +110,10 @@ router.post("/v1/chat/completions", async (req, res) => {
       messageCount: messages.length,
       temperature,
       maxTokens: max_tokens,
-      stream
+      stream,
+      hasTools: tools && tools.length > 0,
+      toolChoice: tool_choice,
+      toolsDebug: tools ? JSON.stringify(tools).substring(0, 500) : 'none'
     });
 
     let result;
@@ -87,7 +122,7 @@ router.post("/v1/chat/completions", async (req, res) => {
     switch (provider) {
       case 'vertex':
         result = await vertexService.generateChatCompletion({
-          model, messages, temperature, max_tokens, top_p, top_k, stream
+          model, messages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
         });
         break;
         
@@ -140,18 +175,57 @@ router.post("/v1/chat/completions", async (req, res) => {
 
       try {
         let fullText = '';
+        let toolCalls = [];
+        let currentToolCall = null;
+        
         for await (const chunk of result.stream) {
           // Get text from chunk - handle different response formats
           let text = '';
+          let chunkToolCalls = null;
+          
           if (typeof chunk.text === 'function') {
             text = chunk.text();
           } else if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
             const candidate = chunk.candidates[0];
             if (candidate.content.parts && candidate.content.parts[0]) {
-              text = candidate.content.parts[0].text || '';
+              const part = candidate.content.parts[0];
+              text = part.text || '';
+              
+              // Check for function calls
+              if (part.functionCall) {
+                chunkToolCalls = [{
+                  id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  type: 'function',
+                  function: {
+                    name: part.functionCall.name,
+                    arguments: JSON.stringify(part.functionCall.args || {})
+                  }
+                }];
+              }
             }
           } else if (chunk.text) {
             text = chunk.text;
+          }
+          
+          // Handle tool calls in streaming
+          if (chunkToolCalls) {
+            toolCalls = chunkToolCalls;
+            
+            const streamResponse = {
+              id: `chatcmpl-${Date.now()}`,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: model,
+              choices: [{
+                index: 0,
+                delta: {
+                  tool_calls: chunkToolCalls
+                },
+                finish_reason: null
+              }]
+            };
+            
+            res.write(`data: ${JSON.stringify(streamResponse)}\n\n`);
           }
           
           if (text) {
@@ -191,7 +265,7 @@ router.post("/v1/chat/completions", async (req, res) => {
           choices: [{
             index: 0,
             delta: {},
-            finish_reason: 'stop'
+            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop'
           }]
         };
         
@@ -262,7 +336,7 @@ router.post("/v1/chat/completions", async (req, res) => {
 });
 
 // Legacy completions endpoint (for compatibility)
-router.post("/v1/completions", async (req, res) => {
+router.post("/completions", async (req, res) => {
   // Convert to chat format and redirect
   const { prompt, ...otherParams } = req.body;
   
@@ -304,7 +378,8 @@ router.get('/models', async (req, res) => {
   }
 });
 
-// Chat completions endpoint - unified for all providers via Vertex AI
+// DISABLED: Chat completions endpoint - using /v1/chat/completions instead
+/*
 router.post('/chat/completions', async (req, res) => {
   try {
     const {
@@ -522,6 +597,7 @@ router.post('/chat/completions', async (req, res) => {
     }
   }
 });
+*/
 
 // Model information endpoint
 router.get('/models/:modelId', async (req, res) => {

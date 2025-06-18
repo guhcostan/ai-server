@@ -12,7 +12,9 @@ class VertexService {
       max_tokens = 2048,
       top_p = 1,
       top_k = 40,
-      stream = false
+      stream = false,
+      tools = null,
+      tool_choice = null
     } = params;
 
     const provider = getModelProvider(model);
@@ -26,24 +28,27 @@ class VertexService {
       temperature,
       maxTokens: max_tokens,
       stream,
+      hasTools: tools && tools.length > 0,
+      toolChoice: tool_choice,
+      toolsDebug: tools ? JSON.stringify(tools).substring(0, 500) : 'none',
       projectId: authService.getProjectId()
     });
 
     // Different processing based on provider
     if (provider === 'google') {
       return await this.generateGoogleModelCompletion({
-        vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model
+        vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model, tools, tool_choice
       });
     } else {
       return await this.generateThirdPartyModelCompletion({
-        vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model
+        vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model, tools, tool_choice
       });
     }
   }
 
-  async generateGoogleModelCompletion({ vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model }) {
+  async generateGoogleModelCompletion({ vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model, tools, tool_choice }) {
     // Configure the generative model for Google models
-    const generativeModel = vertexAI.preview.getGenerativeModel({
+    const modelConfig = {
       model: actualModel,
       generationConfig: {
         temperature: Math.max(0, Math.min(2, temperature)),
@@ -51,7 +56,30 @@ class VertexService {
         topP: Math.max(0, Math.min(1, top_p)),
         topK: Math.max(1, Math.min(40, top_k))
       }
-    });
+    };
+
+    // Add tools if provided
+    if (tools && tools.length > 0) {
+      modelConfig.tools = this.convertOpenAIToolsToVertex(tools);
+      
+      // Handle tool_choice
+      if (tool_choice) {
+        if (tool_choice === 'auto') {
+          modelConfig.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+        } else if (tool_choice === 'none') {
+          modelConfig.toolConfig = { functionCallingConfig: { mode: 'NONE' } };
+        } else if (typeof tool_choice === 'object' && tool_choice.type === 'function') {
+          modelConfig.toolConfig = { 
+            functionCallingConfig: { 
+              mode: 'ANY',
+              allowedFunctionNames: [tool_choice.function.name]
+            } 
+          };
+        }
+      }
+    }
+
+    const generativeModel = vertexAI.preview.getGenerativeModel(modelConfig);
 
     // Process messages for Vertex AI format (handles system messages)
     const contents = processMessagesForVertexAI(messages);
@@ -59,6 +87,8 @@ class VertexService {
     logger.info('Processed contents for Google model', {
       originalMessageCount: messages.length,
       processedContentCount: contents.length,
+      hasTools: tools && tools.length > 0,
+      toolCount: tools ? tools.length : 0,
       firstContent: contents[0] ? JSON.stringify(contents[0]).substring(0, 200) : 'none'
     });
 
@@ -69,7 +99,7 @@ class VertexService {
     }
   }
 
-  async generateThirdPartyModelCompletion({ vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model }) {
+  async generateThirdPartyModelCompletion({ vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model, tools, tool_choice }) {
     try {
       // For third-party models via Model Garden, we use the prediction service
       const endpoint = `projects/${authService.getProjectId()}/locations/us-central1/publishers/${provider}/models/${actualModel}`;
@@ -82,13 +112,16 @@ class VertexService {
         messages: processedMessages,
         temperature,
         max_tokens,
-        stream
+        stream,
+        tools,
+        tool_choice
       });
 
       logger.info('Third-party model request', {
         provider,
         model: actualModel,
         endpoint,
+        hasTools: tools && tools.length > 0,
         requestPayload: JSON.stringify(requestPayload).substring(0, 300)
       });
 
@@ -108,11 +141,47 @@ class VertexService {
     }
   }
 
-  buildThirdPartyRequest({ provider, messages, temperature, max_tokens, stream }) {
+  convertOpenAIToolsToVertex(tools) {
+    const converted = tools.map(tool => {
+      if (tool.type === 'function') {
+        return {
+          functionDeclarations: [{
+            name: tool.function.name,
+            description: tool.function.description || '',
+            parameters: tool.function.parameters || {}
+          }]
+        };
+      }
+      return tool;
+    });
+    
+    logger.info('Converting OpenAI tools to Vertex format', {
+      originalTools: JSON.stringify(tools).substring(0, 300),
+      convertedTools: JSON.stringify(converted).substring(0, 300),
+      toolCount: tools.length
+    });
+    
+    return converted;
+  }
+
+  buildThirdPartyRequest({ provider, messages, temperature, max_tokens, stream, tools, tool_choice }) {
     const baseRequest = {
       temperature: Math.max(0, Math.min(1, temperature)),
       max_tokens: Math.max(1, Math.min(4096, max_tokens))
     };
+
+    // Add tools if supported by provider
+    if (tools && tools.length > 0) {
+      switch (provider) {
+        case 'anthropic':
+          baseRequest.tools = tools;
+          if (tool_choice) {
+            baseRequest.tool_choice = tool_choice;
+          }
+          break;
+        // Other providers may not support tools yet
+      }
+    }
 
     switch (provider) {
       case 'anthropic':
@@ -192,45 +261,94 @@ class VertexService {
 
       const response = result.response;
       
-      // Get the text from the response - different methods depending on the response structure
-      let text;
-      if (typeof response.text === 'function') {
-        text = response.text();
-      } else if (response.candidates && response.candidates[0] && response.candidates[0].content) {
-        // Handle the case where response has candidates array
+      // Initialize response structure
+      let text = '';
+      let toolCalls = [];
+      let finishReason = 'stop';
+      
+      // Process response based on structure
+      if (response.candidates && response.candidates[0]) {
         const candidate = response.candidates[0];
-        if (candidate.content.parts && candidate.content.parts[0]) {
-          text = candidate.content.parts[0].text;
-        } else {
-          text = candidate.content.text || '';
+        
+        if (candidate.content && candidate.content.parts) {
+          for (const part of candidate.content.parts) {
+            // Handle text parts
+            if (part.text) {
+              text += part.text;
+            }
+            
+            // Handle function calls (tools)
+            if (part.functionCall) {
+              toolCalls.push({
+                id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                type: 'function',
+                function: {
+                  name: part.functionCall.name,
+                  arguments: JSON.stringify(part.functionCall.args || {})
+                }
+              });
+              finishReason = 'tool_calls';
+            }
+          }
         }
-      } else if (response.text) {
-        text = response.text;
+        
+        // Check finish reason from candidate
+        if (candidate.finishReason) {
+          switch (candidate.finishReason) {
+            case 'STOP':
+              finishReason = toolCalls.length > 0 ? 'tool_calls' : 'stop';
+              break;
+            case 'MAX_TOKENS':
+              finishReason = 'length';
+              break;
+            case 'SAFETY':
+              finishReason = 'content_filter';
+              break;
+            default:
+              finishReason = 'stop';
+          }
+        }
       } else {
-        // Fallback: try to extract text from the response object
-        text = JSON.stringify(response);
+        // Fallback for different response formats
+        if (typeof response.text === 'function') {
+          text = response.text();
+        } else if (response.text) {
+          text = response.text;
+        } else {
+          text = JSON.stringify(response);
+        }
       }
 
       logger.info('Google model response generated', {
         responseLength: text.length,
         hasResponse: !!response,
         model,
+        toolCallCount: toolCalls.length,
+        finishReason,
         responseStructure: Object.keys(response)
       });
+
+      // Build OpenAI-compatible response
+      const choice = {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: text || null
+        },
+        finish_reason: finishReason
+      };
+
+      // Add tool calls if present
+      if (toolCalls.length > 0) {
+        choice.message.tool_calls = toolCalls;
+      }
 
       return {
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: model,
-        choices: [{
-          index: 0,
-          message: {
-            role: 'assistant',
-            content: text
-          },
-          finish_reason: 'stop'
-        }],
+        choices: [choice],
         usage: {
           prompt_tokens: 0, // Vertex AI doesn't provide token counts
           completion_tokens: 0,

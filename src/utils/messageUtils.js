@@ -44,6 +44,7 @@ export function extractMessageContent(msg) {
 /**
  * Process messages for Vertex AI Gemini models
  * Handles system messages by converting them to user messages with instructions
+ * Supports tool calls and tool results
  */
 export function processMessagesForVertexAI(messages) {
   const contents = [];
@@ -52,7 +53,7 @@ export function processMessagesForVertexAI(messages) {
   // Extract system message if present
   const systemMsg = messages.find(msg => msg.role === 'system');
   if (systemMsg) {
-    systemMessage = systemMsg.content;
+    systemMessage = extractMessageContent(systemMsg);
   }
 
   // Process remaining messages
@@ -60,29 +61,73 @@ export function processMessagesForVertexAI(messages) {
   
   for (let i = 0; i < nonSystemMessages.length; i++) {
     const message = nonSystemMessages[i];
+    const content = extractMessageContent(message);
     
-    // For the first user message, prepend system instructions if available
-    if (i === 0 && message.role === 'user' && systemMessage) {
+    if (message.role === 'tool') {
+      // Handle tool result messages
       contents.push({
-        role: 'user',
+        role: 'function',
         parts: [{
-          text: `${systemMessage}\n\nUser: ${message.content}`
+          functionResponse: {
+            name: message.tool_call_id || 'unknown_function',
+            response: {
+              result: content
+            }
+          }
         }]
+      });
+    } else if (message.role === 'assistant' && message.tool_calls) {
+      // Handle assistant messages with tool calls
+      const parts = [];
+      
+      // Add text content if present
+      if (content && content.trim()) {
+        parts.push({ text: content });
+      }
+      
+      // Add function calls
+      for (const toolCall of message.tool_calls) {
+        if (toolCall.type === 'function') {
+          parts.push({
+            functionCall: {
+              name: toolCall.function.name,
+              args: JSON.parse(toolCall.function.arguments || '{}')
+            }
+          });
+        }
+      }
+      
+      contents.push({
+        role: 'model',
+        parts: parts
       });
     } else {
-      contents.push({
-        role: message.role === 'assistant' ? 'model' : 'user',
-        parts: [{
-          text: message.content
-        }]
-      });
+      // Handle regular messages
+      // For the first user message, prepend system instructions if available
+      if (i === 0 && message.role === 'user' && systemMessage) {
+        contents.push({
+          role: 'user',
+          parts: [{
+            text: `${systemMessage}\n\nUser: ${content}`
+          }]
+        });
+      } else {
+        contents.push({
+          role: message.role === 'assistant' ? 'model' : 'user',
+          parts: [{
+            text: content
+          }]
+        });
+      }
     }
   }
 
   logger.debug('Processed messages for Vertex AI', {
     originalCount: messages.length,
     processedCount: contents.length,
-    hasSystemMessage: !!systemMessage
+    hasSystemMessage: !!systemMessage,
+    hasToolMessages: messages.some(m => m.role === 'tool'),
+    hasToolCalls: messages.some(m => m.tool_calls && m.tool_calls.length > 0)
   });
 
   return contents;
@@ -260,16 +305,55 @@ export function validateMessages(messages) {
   }
 
   for (const message of messages) {
-    if (!message.role || !message.content) {
-      throw new Error('Each message must have role and content properties');
+    if (!message.role) {
+      throw new Error('Each message must have a role property');
     }
 
-    if (!['system', 'user', 'assistant'].includes(message.role)) {
-      throw new Error('Message role must be system, user, or assistant');
+    // Validate role
+    if (!['system', 'user', 'assistant', 'tool'].includes(message.role)) {
+      throw new Error('Message role must be system, user, assistant, or tool');
     }
 
-    if (typeof message.content !== 'string') {
-      throw new Error('Message content must be a string');
+    // Validate content based on role
+    if (message.role === 'tool') {
+      // Tool messages must have content and tool_call_id
+      if (!message.content) {
+        throw new Error('Tool messages must have content');
+      }
+      if (!message.tool_call_id) {
+        throw new Error('Tool messages must have tool_call_id');
+      }
+    } else if (message.role === 'assistant' && message.tool_calls) {
+      // Assistant messages with tool calls
+      if (!Array.isArray(message.tool_calls)) {
+        throw new Error('tool_calls must be an array');
+      }
+      
+      for (const toolCall of message.tool_calls) {
+        if (!toolCall.id || !toolCall.type || !toolCall.function) {
+          throw new Error('Each tool call must have id, type, and function properties');
+        }
+        
+        if (toolCall.type !== 'function') {
+          throw new Error('Only function tool calls are supported');
+        }
+        
+        if (!toolCall.function.name) {
+          throw new Error('Function tool calls must have a name');
+        }
+      }
+      
+      // Content is optional for tool calls
+    } else {
+      // Regular messages must have content
+      if (!message.content) {
+        throw new Error('Messages must have content property');
+      }
+      
+      // Content can be string or array (for multimodal)
+      if (typeof message.content !== 'string' && !Array.isArray(message.content)) {
+        throw new Error('Message content must be a string or array');
+      }
     }
   }
 
