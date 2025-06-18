@@ -1,6 +1,0 @@
-{
-  "chat.agent.enabled": true,
-  "continue.telemetryEnabled": true,
-  "continue.enableTabAutocomplete": true,
-  "continue.manuallyProvideConfig": false
-} 

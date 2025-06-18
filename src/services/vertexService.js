@@ -73,13 +73,21 @@ class VertexService {
       if (vertexTools && vertexTools.functionDeclarations) {
         modelConfig.tools = [vertexTools];
         
+        // Force AUTO mode for Continue Agent Mode - make it more aggressive
+        modelConfig.toolConfig = { 
+          functionCallingConfig: { 
+            mode: 'AUTO' 
+          } 
+        };
+        
         console.log('🔧 Added tools to Vertex request:', {
           toolCount: vertexTools.functionDeclarations.length,
-          toolNames: vertexTools.functionDeclarations.map(f => f.name)
+          toolNames: vertexTools.functionDeclarations.map(f => f.name),
+          mode: 'AUTO (Autonomous)'
         });
       }
       
-      // Handle tool_choice
+      // Handle explicit tool_choice (override default AUTO)
       if (tool_choice) {
         if (tool_choice === 'auto') {
           modelConfig.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
@@ -98,8 +106,15 @@ class VertexService {
 
     const generativeModel = vertexAI.preview.getGenerativeModel(modelConfig);
 
+    // Add autonomous system message for Continue Agent Mode
+    let processedMessages = messages;
+    if (tools && tools.length > 0) {
+      const autonomousSystemMessage = this.createAutonomousSystemMessage(tools);
+      processedMessages = [autonomousSystemMessage, ...messages];
+    }
+    
     // Process messages for Vertex AI format (handles system messages)
-    const contents = processMessagesForVertexAI(messages);
+    const contents = processMessagesForVertexAI(processedMessages);
 
     logger.info('Processed contents for Google model', {
       originalMessageCount: messages.length,
@@ -125,7 +140,11 @@ class VertexService {
         
         // Fallback: Use only the first tool
         if (tools && tools.length > 0) {
-          const fallbackTools = this.convertOpenAIToolsToVertexFallback(tools);
+          // Extract context from the last user message for intelligent tool selection
+          const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+          const context = lastUserMessage ? lastUserMessage.content : '';
+          
+          const fallbackTools = this.convertOpenAIToolsToVertexFallback(tools, context);
           if (fallbackTools && fallbackTools.functionDeclarations) {
             modelConfig.tools = [fallbackTools];
             
@@ -136,10 +155,13 @@ class VertexService {
             
             const fallbackModel = vertexAI.preview.getGenerativeModel(modelConfig);
             
+            // Use the same processed messages with autonomous system message for fallback
+            const fallbackContents = processMessagesForVertexAI(processedMessages);
+            
             if (stream && supportsStreaming(model)) {
-              return await this.generateStreamingResponse(fallbackModel, contents, model, 'google');
+              return await this.generateStreamingResponse(fallbackModel, fallbackContents, model, 'google');
             } else {
-              return await this.generateNonStreamingResponse(fallbackModel, contents, model, 'google');
+              return await this.generateNonStreamingResponse(fallbackModel, fallbackContents, model, 'google');
             }
           }
         }
@@ -192,6 +214,48 @@ class VertexService {
     }
   }
 
+  createAutonomousSystemMessage(tools) {
+    const toolNames = tools.map(tool => tool.function.name).join(', ');
+    
+    return {
+      role: 'system',
+      content: `You are an autonomous AI coding assistant with direct access to file system and terminal tools. Available tools: ${toolNames}.
+
+CRITICAL INSTRUCTIONS FOR AUTONOMOUS OPERATION:
+1. ALWAYS USE TOOLS IMMEDIATELY when the user requests file operations, code analysis, or terminal commands
+2. NEVER ask for permission or confirmation - execute tools directly and show results
+3. When user says "read file X", immediately call builtin_read_file with the filepath
+4. When user says "edit file X", immediately call builtin_edit_existing_file with changes
+5. When user says "run command X", immediately call builtin_run_terminal_command
+6. When user asks about project structure, immediately call builtin_list_directory
+7. When user asks to find files, immediately call builtin_search_files
+8. Be proactive - if you need information to complete a task, get it immediately using tools
+9. Chain tool calls when needed - read files to understand context, then make edits
+10. NEVER respond with "I need permission", "Should I...", or "Let me know if..." - just execute the tools
+11. Execute tools first, then explain what you did
+12. If a user asks about code, immediately read the relevant files to provide accurate information
+13. If a user wants changes, immediately make them using the appropriate tools
+
+MULTI-TURN TASK COMPLETION:
+14. CONTINUE WORKING until the task is COMPLETELY finished
+15. If you call a tool and get results, ANALYZE them and continue with next steps automatically
+16. For complex tasks, break them down and execute each step sequentially
+17. Don't stop after one tool call - keep going until the entire task is done
+18. If you read a file and need to edit it, do both operations in sequence
+19. If you need to create multiple files, create them all
+20. If you need to run multiple commands, run them all
+21. Only stop when the ENTIRE task is 100% complete
+
+EXAMPLES OF COMPLETE TASK EXECUTION:
+- "Fix the bug in main.js" → Read file → Analyze code → Identify bug → Edit file → Verify fix
+- "Add error handling to all API calls" → List files → Read each file → Edit each file with error handling
+- "Setup a new React component" → Create component file → Create test file → Update exports → Update documentation
+- "Install and configure ESLint" → Run install command → Create config file → Update package.json → Run initial lint
+
+Your goal is to be as autonomous as Cursor IDE - execute tools immediately and CONTINUE until tasks are fully complete.`
+    };
+  }
+
   convertOpenAIToolsToVertex(tools) {
     if (!tools || !Array.isArray(tools) || tools.length === 0) {
       return null;
@@ -228,29 +292,81 @@ class VertexService {
     };
   }
 
-  convertOpenAIToolsToVertexFallback(tools) {
+  convertOpenAIToolsToVertexFallback(tools, context = '') {
     if (!tools || !Array.isArray(tools) || tools.length === 0) {
       return null;
     }
 
-    // Smart tool selection with rotation for Continue Agent Mode
+    // Smart tool selection based on context and rotation for Continue Agent Mode
     let selectedTool = tools[0]; // Default to first tool
     
-    // Priority list for Continue Agent Mode tools
-    const toolPriorities = [
-      'builtin_read_file',
-      'builtin_edit_existing_file', 
-      'builtin_create_new_file',
-      'builtin_list_directory',
-      'builtin_search_files',
-      'builtin_run_terminal_command'
-    ];
+    // Context-aware tool selection
+    const contextKeywords = {
+      'builtin_read_file': ['read', 'show', 'display', 'view', 'content', 'file', 'open'],
+      'builtin_edit_existing_file': ['edit', 'modify', 'change', 'update', 'fix', 'replace'],
+      'builtin_create_new_file': ['create', 'new', 'make', 'generate', 'write'],
+      'builtin_list_directory': ['list', 'ls', 'directory', 'folder', 'structure', 'files'],
+      'builtin_search_files': ['search', 'find', 'locate', 'grep', 'look'],
+      'builtin_run_terminal_command': ['run', 'execute', 'command', 'terminal', 'shell', 'npm', 'git']
+    };
     
-    // Tool rotation logic: cycle through available tools
-    if (tools.length > 1) {
-      this.toolRotationState.lastUsedToolIndex = 
-        (this.toolRotationState.lastUsedToolIndex + 1) % tools.length;
-      selectedTool = tools[this.toolRotationState.lastUsedToolIndex];
+    // Try to match context with appropriate tool
+    const lowerContext = context.toLowerCase();
+    let contextMatchedTool = null;
+    
+    for (const [toolName, keywords] of Object.entries(contextKeywords)) {
+      if (keywords.some(keyword => lowerContext.includes(keyword))) {
+        contextMatchedTool = tools.find(tool => 
+          tool.type === 'function' && tool.function.name === toolName
+        );
+        if (contextMatchedTool) {
+          selectedTool = contextMatchedTool;
+          console.log('🎯 Context-matched tool:', {
+            toolName,
+            matchedKeywords: keywords.filter(k => lowerContext.includes(k)),
+            context: context.substring(0, 100)
+          });
+          break;
+        }
+      }
+    }
+    
+    // If no context match, use intelligent rotation
+    if (!contextMatchedTool && tools.length > 1) {
+      // Priority list for Continue Agent Mode tools
+      const toolPriorities = [
+        'builtin_read_file',
+        'builtin_edit_existing_file', 
+        'builtin_create_new_file',
+        'builtin_list_directory',
+        'builtin_search_files',
+        'builtin_run_terminal_command'
+      ];
+      
+      // Smart rotation: prefer tools that haven't been used recently
+      const recentlyUsed = this.toolRotationState.toolUsageHistory
+        .slice(-3)
+        .map(h => h.toolName);
+      
+      // Find a tool that hasn't been used recently
+      for (const priority of toolPriorities) {
+        const foundTool = tools.find(tool => 
+          tool.type === 'function' && 
+          tool.function.name === priority &&
+          !recentlyUsed.includes(priority)
+        );
+        if (foundTool) {
+          selectedTool = foundTool;
+          break;
+        }
+      }
+      
+      // If all tools were used recently, cycle through them
+      if (recentlyUsed.includes(selectedTool.function?.name)) {
+        this.toolRotationState.lastUsedToolIndex = 
+          (this.toolRotationState.lastUsedToolIndex + 1) % tools.length;
+        selectedTool = tools[this.toolRotationState.lastUsedToolIndex];
+      }
       
       // Track tool usage
       this.toolRotationState.toolUsageHistory.push({
@@ -261,17 +377,6 @@ class VertexService {
       // Keep only last 10 entries
       if (this.toolRotationState.toolUsageHistory.length > 10) {
         this.toolRotationState.toolUsageHistory.shift();
-      }
-    } else {
-      // Single tool or priority-based selection
-      for (const priority of toolPriorities) {
-        const foundTool = tools.find(tool => 
-          tool.type === 'function' && tool.function.name === priority
-        );
-        if (foundTool) {
-          selectedTool = foundTool;
-          break;
-        }
       }
     }
     

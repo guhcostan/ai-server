@@ -357,59 +357,60 @@ router.get('/models', async (req, res) => {
   }
 });
 
-// DISABLED: Chat completions endpoint - using /v1/chat/completions instead
-/*
+// Chat completions endpoint
 router.post('/chat/completions', async (req, res) => {
   try {
-    const {
-      model,
-      messages,
-      temperature = 0.7,
-      max_tokens = 2048,
-      top_p = 1,
-      top_k = 40,
+    console.log('🔍 DEBUG: Endpoint called with tools:', req.body.tools ? 'YES' : 'NO');
+    
+    logger.info('Raw request body received', {
+      bodyKeys: Object.keys(req.body),
+      hasTools: !!req.body.tools,
+      toolsType: typeof req.body.tools,
+      toolsValue: req.body.tools ? JSON.stringify(req.body.tools).substring(0, 200) : 'none'
+    });
+
+    const { 
+      model, 
+      messages, 
+      temperature = 0.7, 
+      max_tokens = 2048, 
+      top_p = 1, 
+      top_k = 40, 
       stream = false,
-      ...otherParams
+      tools,
+      tool_choice
     } = req.body;
 
-    // Validate required parameters
-    if (!model) {
+    console.log('🔍 DEBUG: Extracted parameters:', {
+      model,
+      hasMessages: !!messages,
+      hasTools: !!tools
+    });
+
+    // Validate required fields
+    if (!model || !messages) {
       return res.status(400).json({
         error: {
-          message: 'Model parameter is required',
+          message: 'Missing required fields: model and messages are required',
           type: 'invalid_request_error'
         }
       });
     }
 
-    if (!messages) {
-      return res.status(400).json({
-        error: {
-          message: 'Messages parameter is required',
-          type: 'invalid_request_error'
-        }
-      });
-    }
+    // Detect provider and validate model
+    const { provider, actualModel, modelExists } = detectProvider(model);
+    
+    console.log('🔍 DEBUG: Provider detection:', {
+      model,
+      provider,
+      modelExists
+    });
 
-    // Validate messages format
-    try {
-      validateMessages(messages);
-    } catch (validationError) {
+    if (!modelExists) {
       return res.status(400).json({
         error: {
-          message: validationError.message,
-          type: 'invalid_request_error'
-        }
-      });
-    }
-
-    // Check if model is supported
-    const provider = getModelProvider(model);
-    if (!provider) {
-      return res.status(400).json({
-        error: {
-          message: `Model '${model}' is not supported. Use /v1/models to see available models.`,
-          type: 'invalid_request_error'
+          message: `Model ${model} not found. Available models: ${Object.keys(MODELS).join(', ')}`,
+          type: 'model_not_found'
         }
       });
     }
@@ -418,122 +419,131 @@ router.post('/chat/completions', async (req, res) => {
       model,
       provider,
       messageCount: messages.length,
+      hasTools: !!tools,
+      toolChoice: tool_choice,
+      toolsDebug: tools ? JSON.stringify(tools).substring(0, 200) : 'none',
       temperature,
       maxTokens: max_tokens,
-      stream,
-      hasOtherParams: Object.keys(otherParams).length > 0
+      stream
     });
 
-    // Use unified Vertex AI service for all models
-    const result = await vertexService.generateChatCompletion({
-      model,
-      messages,
-      temperature,
-      max_tokens,
-      top_p,
-      top_k,
-      stream
+    console.log('🔍 DEBUG: About to call vertexService');
+
+    // Check if this is a continuation of an autonomous task
+    const isAutonomousContinuation = await checkForAutonomousContinuation(messages, tools);
+    
+    let result;
+    if (isAutonomousContinuation) {
+      // Handle autonomous continuation
+      result = await handleAutonomousContinuation({
+        model: actualModel,
+        messages,
+        temperature,
+        max_tokens,
+        top_p,
+        top_k,
+        stream,
+        provider,
+        tools,
+        tool_choice
+      });
+    } else {
+      // Regular single-turn processing
+      result = await vertexService.generateChatCompletion({
+        model: actualModel,
+        messages,
+        temperature,
+        max_tokens,
+        top_p,
+        top_k,
+        stream,
+        provider,
+        tools,
+        tool_choice
+      });
+    }
+
+    console.log('🔍 DEBUG: VertexService returned:', {
+      hasResult: !!result,
+      isStream: result?.isStream
     });
 
     if (result.isStream) {
       // Handle streaming response
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
+      });
 
-      if (provider === 'google') {
-        // Handle Google/Vertex AI streaming
+      try {
         for await (const chunk of result.stream) {
-          // Get text from chunk - handle different response formats
-          let text = '';
-          if (typeof chunk.text === 'function') {
-            text = chunk.text();
-          } else if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
-            const candidate = chunk.candidates[0];
-            if (candidate.content.parts && candidate.content.parts[0]) {
-              text = candidate.content.parts[0].text || '';
+          if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
+            const content = chunk.candidates[0].content.parts[0]?.text || '';
+            if (content) {
+              const streamChunk = {
+                id: `chatcmpl-${Date.now()}`,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model: model,
+                choices: [{
+                  index: 0,
+                  delta: { content },
+                  finish_reason: null
+                }]
+              };
+              res.write(`data: ${JSON.stringify(streamChunk)}\n\n`);
             }
-          } else if (chunk.text) {
-            text = chunk.text;
-          }
-          
-          if (text) {
-            const streamChunk = {
-              id: `chatcmpl-${Date.now()}`,
-              object: 'chat.completion.chunk',
-              created: Math.floor(Date.now() / 1000),
-              model: model,
-              choices: [{
-                index: 0,
-                delta: {
-                  content: text
-                },
-                finish_reason: null
-              }]
-            };
-            res.write(`data: ${JSON.stringify(streamChunk)}\n\n`);
           }
         }
-      } else {
-        // Handle third-party streaming (mock implementation)
-        for await (const chunk of result.stream) {
-          // Get text from chunk
-          let text = '';
-          if (typeof chunk.text === 'function') {
-            text = chunk.text();
-          } else if (chunk.text) {
-            text = chunk.text;
-          }
-          
-          if (text) {
-            const streamChunk = {
-              id: `chatcmpl-${Date.now()}`,
-              object: 'chat.completion.chunk',
-              created: Math.floor(Date.now() / 1000),
-              model: model,
-              choices: [{
-                index: 0,
-                delta: {
-                  content: text
-                },
-                finish_reason: null
-              }]
-            };
-            res.write(`data: ${JSON.stringify(streamChunk)}\n\n`);
-          }
-        }
+        
+        // Send final chunk
+        const finalChunk = {
+          id: `chatcmpl-${Date.now()}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: model,
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: 'stop'
+          }]
+        };
+        res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } catch (streamError) {
+        logger.error('Streaming error', { error: streamError.message });
+        res.end();
       }
-
-      // Send final chunk
-      const finalChunk = {
+    } else {
+      // Handle non-streaming response
+      const response = {
         id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion.chunk',
+        object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: model,
         choices: [{
           index: 0,
-          delta: {},
-          finish_reason: 'stop'
-        }]
+          message: result.message,
+          finish_reason: result.finish_reason || 'stop'
+        }],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0
+        }
       };
-      res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
-      res.write('data: [DONE]\n\n');
-      res.end();
 
-      logger.info('Streaming response completed', {
-        model,
-        provider
-      });
-    } else {
-      // Handle non-streaming response
-      res.json(result);
-      
-      logger.info('Non-streaming response sent', {
+      logger.info('Chat completion completed', {
         model,
         provider,
-        responseLength: result.choices?.[0]?.message?.content?.length || 0
+        responseLength: result.message?.content?.length || 0,
+        duration: Date.now() - req.startTime
       });
+
+      res.json(response);
     }
 
   } catch (error) {
@@ -541,42 +551,78 @@ router.post('/chat/completions', async (req, res) => {
       error: error.message,
       stack: error.stack,
       model: req.body?.model,
-      provider: req.body?.model ? getModelProvider(req.body.model) : 'unknown'
+      provider: req.body?.provider
     });
 
-    // Handle specific error types
-    if (error.message.includes('quota') || error.message.includes('rate limit')) {
-      res.status(429).json({
-        error: {
-          message: 'Rate limit exceeded. Please try again later.',
-          type: 'rate_limit_error'
-        }
-      });
-    } else if (error.message.includes('authentication') || error.message.includes('unauthorized')) {
-      res.status(401).json({
-        error: {
-          message: 'Authentication failed. Please check your credentials.',
-          type: 'authentication_error'
-        }
-      });
-    } else if (error.message.includes('not found') || error.message.includes('model not available')) {
-      res.status(404).json({
-        error: {
-          message: 'The requested model is not available.',
-          type: 'model_not_found_error'
-        }
-      });
-    } else {
-      res.status(500).json({
-        error: {
-          message: 'Internal server error occurred while processing your request.',
-          type: 'internal_error'
-        }
-      });
-    }
+    res.status(500).json({
+      error: {
+        message: error.message || 'Internal server error',
+        type: 'api_error'
+      }
+    });
   }
 });
-*/
+
+// Import task continuation service
+import taskContinuationService from '../services/taskContinuationService.js';
+
+// Function to check if this is an autonomous continuation
+async function checkForAutonomousContinuation(messages, tools) {
+  if (!tools || !messages || messages.length < 2) {
+    return false;
+  }
+
+  // Use the advanced task continuation analysis
+  const analysis = taskContinuationService.analyzeTaskContinuation(messages, tools);
+  
+  console.log('🔄 Task continuation analysis:', {
+    shouldContinue: analysis.shouldContinue,
+    taskType: analysis.taskState?.taskType,
+    completionLevel: analysis.taskState?.completionLevel,
+    nextSteps: analysis.taskState?.nextSteps?.length || 0
+  });
+
+  return analysis.shouldContinue;
+}
+
+// Function to handle autonomous continuation
+async function handleAutonomousContinuation(params) {
+  const { messages, tools, ...otherParams } = params;
+  
+  // Get detailed task analysis
+  const analysis = taskContinuationService.analyzeTaskContinuation(messages, tools);
+  
+  if (!analysis.shouldContinue || !analysis.taskState) {
+    // Fallback to regular processing
+    return await vertexService.generateChatCompletion({
+      ...otherParams,
+      messages,
+      tools
+    });
+  }
+
+  // Generate intelligent continuation prompt based on task state
+  const continuationPrompt = taskContinuationService.generateContinuationPrompt(analysis.taskState);
+  
+  const continuationMessage = {
+    role: 'system',
+    content: continuationPrompt
+  };
+
+  const enhancedMessages = [...messages, continuationMessage];
+
+  console.log('🚀 Autonomous continuation with intelligent prompt:', {
+    taskType: analysis.taskState.taskType,
+    completionLevel: analysis.taskState.completionLevel,
+    nextStepsCount: analysis.taskState.nextSteps.length
+  });
+
+  return await vertexService.generateChatCompletion({
+    ...otherParams,
+    messages: enhancedMessages,
+    tools
+  });
+}
 
 // Model information endpoint
 router.get('/models/:modelId', async (req, res) => {
