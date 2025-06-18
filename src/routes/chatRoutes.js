@@ -118,49 +118,10 @@ router.post("/chat/completions", async (req, res) => {
 
     let result;
 
-    // Route to appropriate service based on provider
-    switch (provider) {
-      case 'vertex':
-        result = await vertexService.generateChatCompletion({
-          model, messages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
-        });
-        break;
-        
-      case 'openai':
-        // TODO: Implement OpenAI service
-        return res.status(501).json({
-          error: {
-            message: "OpenAI provider not yet implemented",
-            type: "not_implemented_error"
-          }
-        });
-        
-      case 'anthropic':
-        // TODO: Implement Anthropic service
-        return res.status(501).json({
-          error: {
-            message: "Anthropic provider not yet implemented",
-            type: "not_implemented_error"
-          }
-        });
-        
-      case 'xai':
-        // TODO: Implement xAI service
-        return res.status(501).json({
-          error: {
-            message: "xAI provider not yet implemented",
-            type: "not_implemented_error"
-          }
-        });
-        
-      default:
-        return res.status(400).json({
-          error: {
-            message: `Unknown provider: ${provider}`,
-            type: "invalid_request_error"
-          }
-        });
-    }
+    // Route to appropriate service - all models use Vertex AI as unified gateway
+    result = await vertexService.generateChatCompletion({
+      model, messages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
+    });
 
     // Handle streaming response
     if (result.isStream) {
