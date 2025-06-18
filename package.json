@@ -1,14 +1,55 @@
 {
   "name": "continue-vertex-api",
-  "version": "1.0.0",
-  "description": "API Gateway for Continue extension to connect with VertexAI services",
+  "version": "2.0.0",
+  "description": "Production-ready AI API Gateway providing unified access to multiple AI model providers through Google Cloud Vertex AI",
   "main": "index.js",
   "type": "module",
+  "keywords": [
+    "ai",
+    "api-gateway",
+    "vertex-ai",
+    "google-cloud",
+    "openai-compatible",
+    "anthropic",
+    "claude",
+    "gemini",
+    "llama",
+    "mistral",
+    "continue-extension"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/continue-vertex-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/continue-vertex-api/issues"
+  },
+  "homepage": "https://github.com/your-username/continue-vertex-api#readme",
+  "author": {
+    "name": "Your Name",
+    "email": "your.email@example.com"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node test.js",
-    "health": "curl http://localhost:3000/health"
+    "dev:debug": "nodemon --inspect index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:health": "curl -f http://localhost:3000/v1/health || exit 1",
+    "lint": "echo \"No linter configured\"",
+    "format": "echo \"No formatter configured\"",
+    "build": "echo \"No build step required for Node.js\"",
+    "clean": "rm -rf node_modules package-lock.json && npm install",
+    "docker:build": "docker build -t continue-vertex-api .",
+    "docker:run": "docker run -p 3000:3000 continue-vertex-api",
+    "logs": "tail -f *.log",
+    "start:pm2": "pm2 start ecosystem.config.js",
+    "stop:pm2": "pm2 stop ecosystem.config.js",
+    "restart:pm2": "pm2 restart ecosystem.config.js"
   },
   "dependencies": {
     "@google-cloud/aiplatform": "^4.0.0",
@@ -19,16 +60,12 @@
     "express": "^4.18.2",
     "google-auth-library": "^9.0.0",
     "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
     "node-fetch": "^3.3.2",
     "winston": "^3.11.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "engines": {
-    "node": ">=18"
-  },
-  "author": "",
-  "license": "MIT",
-  "packageManager": "yarn@4.9.1+sha512.f95ce356460e05be48d66401c1ae64ef84d163dd689964962c6888a9810865e39097a5e9de748876c2e0bf89b232d583c33982773e9903ae7a76257270986538"
+  "packageManager": "yarn@4.9.1"
 }

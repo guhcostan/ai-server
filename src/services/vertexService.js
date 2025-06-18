@@ -1,16 +1,233 @@
-import authService from './auth.js';
+import { VertexAI } from '@google-cloud/vertexai';
 import logger from '../config/logger.js';
+import { config } from '../config/environment.js';
 import { getActualModelName, getModelProvider, supportsStreaming } from '../config/models.js';
 import { processMessagesForVertexAI, processMessagesForThirdParty } from '../utils/messageUtils.js';
 
+/**
+ * Vertex AI Service
+ * 
+ * Provides a unified interface for interacting with Google Cloud Vertex AI models.
+ * Uses gcloud CLI authentication automatically - no manual API keys required.
+ * 
+ * @class VertexService
+ */
 class VertexService {
   constructor() {
+    this.vertexAI = null;
+    this.projectId = null;
+    this.location = config.googleCloud.location;
+    this.initialized = false;
     // Tool rotation state for Continue Agent Mode
     this.toolRotationState = {
       lastUsedToolIndex: -1,
       conversationId: null,
       toolUsageHistory: []
     };
+  }
+
+  /**
+   * Initialize the Vertex AI client
+   * Uses gcloud CLI authentication automatically
+   * 
+   * @returns {Promise<void>}
+   */
+  async initialize() {
+    try {
+      if (this.initialized) {
+        return;
+      }
+
+      // Get project ID from config or auto-detect from gcloud
+      this.projectId = config.googleCloud.projectId;
+      
+      if (!this.projectId) {
+        logger.info('Project ID not specified, will be auto-detected from gcloud CLI');
+      }
+
+      // Initialize Vertex AI client (uses Application Default Credentials from gcloud)
+      this.vertexAI = new VertexAI({
+        project: this.projectId,
+        location: this.location
+      });
+
+      this.initialized = true;
+      logger.info(`Vertex AI service initialized successfully`, {
+        projectId: this.projectId || 'auto-detected',
+        location: this.location
+      });
+
+    } catch (error) {
+      logger.error('Failed to initialize Vertex AI service', {
+        error: error.message,
+        stack: error.stack
+      });
+      throw new Error(`Vertex AI initialization failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get available models
+   * 
+   * @returns {Array} List of available models
+   */
+  getAvailableModels() {
+    return [
+      'gemini-1.5-pro',
+      'gemini-1.5-flash',
+      'gemini-1.0-pro',
+      'text-bison',
+      'code-bison',
+      'chat-bison'
+    ];
+  }
+
+  /**
+   * Generate content using Vertex AI models
+   * 
+   * @param {Array} messages - Array of message objects
+   * @param {Object} options - Generation options
+   * @returns {Promise<Object>} Generated response
+   */
+  async generateContent(messages, options = {}) {
+    try {
+      await this.initialize();
+
+      const {
+        model = config.models.defaultModel,
+        temperature = config.models.temperature,
+        maxTokens = config.models.maxTokens,
+        stream = false
+      } = options;
+
+      logger.info('Generating content with Vertex AI', {
+        model,
+        messageCount: messages.length,
+        temperature,
+        maxTokens,
+        stream
+      });
+
+      // Get the generative model
+      const generativeModel = this.vertexAI.getGenerativeModel({
+        model: model,
+        generationConfig: {
+          temperature: temperature,
+          maxOutputTokens: maxTokens,
+        }
+      });
+
+      // Convert messages to Vertex AI format
+      const formattedMessages = this.formatMessages(messages);
+
+      let result;
+      if (stream) {
+        result = await generativeModel.generateContentStream(formattedMessages);
+      } else {
+        result = await generativeModel.generateContent(formattedMessages);
+      }
+
+      logger.info('Content generated successfully', {
+        model,
+        hasResult: !!result
+      });
+
+      return this.formatResponse(result, stream);
+
+    } catch (error) {
+      logger.error('Failed to generate content', {
+        error: error.message,
+        stack: error.stack,
+        model: options.model
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Format messages for Vertex AI
+   * 
+   * @param {Array} messages - Input messages
+   * @returns {Array} Formatted messages
+   */
+  formatMessages(messages) {
+    return messages.map(message => {
+      if (message.role === 'system') {
+        // System messages are typically merged with user messages in Vertex AI
+        return {
+          role: 'user',
+          parts: [{ text: `System: ${message.content}` }]
+        };
+      } else if (message.role === 'user') {
+        return {
+          role: 'user',
+          parts: [{ text: message.content }]
+        };
+      } else if (message.role === 'assistant') {
+        return {
+          role: 'model',
+          parts: [{ text: message.content }]
+        };
+      }
+      return message;
+    });
+  }
+
+  /**
+   * Format response from Vertex AI
+   * 
+   * @param {Object} result - Raw response from Vertex AI
+   * @param {boolean} isStream - Whether this is a streaming response
+   * @returns {Object} Formatted response
+   */
+  formatResponse(result, isStream = false) {
+    if (isStream) {
+      return {
+        stream: true,
+        result: result
+      };
+    }
+
+    const response = result.response;
+    const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    return {
+      content: text,
+      model: response.modelVersion || 'unknown',
+      usage: {
+        promptTokens: response.usageMetadata?.promptTokenCount || 0,
+        completionTokens: response.usageMetadata?.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata?.totalTokenCount || 0
+      },
+      finishReason: response.candidates?.[0]?.finishReason || 'unknown'
+    };
+  }
+
+  /**
+   * Health check for the service
+   * 
+   * @returns {Promise<Object>} Health status
+   */
+  async healthCheck() {
+    try {
+      await this.initialize();
+      
+      return {
+        status: 'healthy',
+        service: 'vertex-ai',
+        projectId: this.projectId || 'auto-detected',
+        location: this.location,
+        availableModels: this.getAvailableModels().length,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        service: 'vertex-ai',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 
   async generateChatCompletion(params) {
@@ -27,7 +244,6 @@ class VertexService {
     } = params;
 
     const provider = getModelProvider(model);
-    const vertexAI = authService.getVertexAI();
     const actualModel = getActualModelName(model, provider);
 
     logger.info('Processing chat completion via Vertex AI', {
@@ -40,17 +256,17 @@ class VertexService {
       hasTools: tools && tools.length > 0,
       toolChoice: tool_choice,
       toolsDebug: tools ? JSON.stringify(tools).substring(0, 500) : 'none',
-      projectId: authService.getProjectId()
+      projectId: this.projectId
     });
 
     // Different processing based on provider
     if (provider === 'google') {
       return await this.generateGoogleModelCompletion({
-        vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model, tools, tool_choice
+        vertexAI: this.vertexAI, actualModel, messages, temperature, max_tokens, top_p, top_k, stream, model, tools, tool_choice
       });
     } else {
       return await this.generateThirdPartyModelCompletion({
-        vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model, tools, tool_choice
+        vertexAI: this.vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model, tools, tool_choice
       });
     }
   }
@@ -175,7 +391,7 @@ class VertexService {
   async generateThirdPartyModelCompletion({ vertexAI, actualModel, provider, messages, temperature, max_tokens, stream, model, tools, tool_choice }) {
     try {
       // For third-party models via Model Garden, we use the prediction service
-      const endpoint = `projects/${authService.getProjectId()}/locations/us-central1/publishers/${provider}/models/${actualModel}`;
+      const endpoint = `projects/${this.projectId}/locations/us-central1/publishers/${provider}/models/${actualModel}`;
       
       // Process messages for third-party format (different from Google format)
       const processedMessages = processMessagesForThirdParty(messages, provider);
@@ -696,5 +912,5 @@ Your goal is to be as autonomous as Cursor IDE - execute tools immediately and C
   }
 }
 
-export const vertexService = new VertexService();
-export default vertexService; 
+// Export singleton instance
+export default new VertexService(); 
