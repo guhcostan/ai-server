@@ -1,0 +1,179 @@
+%YAML 1.1
+---
+name: AI Server Assistant
+version: 1.0.0
+schema: v1
+
+model_defaults: &model_defaults
+  provider: openai
+  apiKey: sk-vertex-ai
+  apiBase: http://localhost:3000/v1
+  roles:
+    - chat
+  capabilities:
+    - tool_use
+  defaultCompletionOptions:
+    contextLength: 128_000
+    temperature: 0.5
+
+embedding_defaults: &embedding_defaults
+  provider: openai
+  apiKey: sk-vertex-ai
+  apiBase: http://localhost:3000/v1
+  roles:
+    - embed
+
+models:
+  # CHAT MODELS
+
+  - name: Gemini 2.5 Pro (Primary)
+    <<: *model_defaults
+    model: gemini-2.5-pro
+    defaultCompletionOptions:
+      contextLength: 2_097_152
+      temperature: 0.3
+    roles:
+      - chat
+
+  - name: Gemini 2.5 Flash
+    <<: *model_defaults
+    model: gemini-2.5-flash
+    defaultCompletionOptions:
+      contextLength: 1_000_000
+      temperature: 0.5
+
+  - name: Gemini 2.0 Pro
+    <<: *model_defaults
+    model: gemini-2.0-pro
+    defaultCompletionOptions:
+      contextLength: 120_000
+      temperature: 0.5
+
+  - name: Gemini 2.0 Flash
+    <<: *model_defaults
+    model: gemini-2.0-flash
+    defaultCompletionOptions:
+      contextLength: 1_000_000
+      temperature: 0.7
+
+  - name: Gemini 1.5 Pro
+    <<: *model_defaults
+    model: gemini-1.5-pro
+    defaultCompletionOptions:
+      contextLength: 2_000_000
+      temperature: 0.5
+
+  - name: Gemini 1.5 Flash
+    <<: *model_defaults
+    model: gemini-1.5-flash
+    defaultCompletionOptions:
+      contextLength: 1_000_000
+      temperature: 0.7
+
+  - name: Claude 3.5 Sonnet
+    <<: *model_defaults
+    model: claude-3-5-sonnet-20241022
+    defaultCompletionOptions:
+      contextLength: 200_000
+      temperature: 0.5
+    roles:
+      - chat
+      - autocomplete
+
+  - name: Claude 3 Haiku
+    <<: *model_defaults
+    model: claude-3-haiku-20240307
+    defaultCompletionOptions:
+      contextLength: 200_000
+      temperature: 0.7
+
+  - name: Claude 3 Sonnet
+    <<: *model_defaults
+    model: claude-3-sonnet-20240229
+    defaultCompletionOptions:
+      contextLength: 200_000
+      temperature: 0.5
+
+  - name: Claude 3 Opus
+    <<: *model_defaults
+    model: claude-3-opus-20240229
+    defaultCompletionOptions:
+      contextLength: 200_000
+      temperature: 0.3
+
+  - name: Llama 3.1 405B Instruct
+    <<: *model_defaults
+    model: llama-3-1-405b-instruct
+    defaultCompletionOptions:
+      contextLength: 128_000
+      temperature: 0.5
+
+  - name: Llama 3.1 70B Instruct
+    <<: *model_defaults
+    model: llama-3-1-70b-instruct
+    defaultCompletionOptions:
+      contextLength: 128_000
+      temperature: 0.7
+
+  - name: Mistral Large 2407
+    <<: *model_defaults
+    model: mistral-large-2407
+    defaultCompletionOptions:
+      contextLength: 128_000
+      temperature: 0.5
+
+  - name: Command R Plus
+    <<: *model_defaults
+    model: command-r-plus
+    defaultCompletionOptions:
+      contextLength: 128_000
+      temperature: 0.5
+
+  # EMBEDDING MODELS
+
+  - name: Text Embedding 3 Small
+    <<: *embedding_defaults
+    model: text-embedding-3-small
+    embedOptions:
+      maxBatchSize: 50
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+  - provider: codebase
+  - provider: currentFile
+  - provider: open
+    params:
+      onlyPinned: false
+  - provider: search
+  - provider: clipboard
+  - provider: tree
+  - provider: repo-map
+    params:
+      includeSignatures: true
+
+rules:
+  - name: Code documentation
+    rule: The documentation of code should be in English and if it's python you should use numpy docstrings
+  - name: Tool usage
+    rule: If you have access to tools, it's highly recommended to use them to avoid making assumptions of the project
+  - name: Vertex AI Gateway
+    rule: Always use Vertex AI as the unified gateway for all AI models
+  - name: Tool Transparency
+    rule: Explain your reasoning when using tools and making decisions
+  - name: Permission Protocol
+    rule: Ask for explicit permission before making destructive changes
+  - name: Model Selection
+    rule: Use the most appropriate model for each task (Gemini 2.5 Pro for complex, Flash for simple)
+  - name: Task Management
+    rule: Break down complex tasks into smaller, manageable steps
+  - name: Verification
+    rule: Verify changes by reading files after modifications
+  - name: Code Understanding
+    rule: Use search tools to understand codebase structure before making changes
+  - name: Pattern Recognition
+    rule: Always check for existing patterns and conventions in the codebase 

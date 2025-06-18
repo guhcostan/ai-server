@@ -54,6 +54,12 @@ router.post("/chat/completions", async (req, res) => {
       tool_choice = null
     } = req.body;
 
+    console.log("🔍 DEBUG: Extracted parameters:", {
+      model,
+      hasMessages: !!messages,
+      hasTools: !!tools
+    });
+
     // Basic validation
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ 
@@ -95,6 +101,13 @@ router.post("/chat/completions", async (req, res) => {
 
     // Determine which provider to use
     const provider = getModelProvider(model);
+    
+    console.log("🔍 DEBUG: Provider detection:", {
+      model,
+      provider,
+      modelExists: provider !== null
+    });
+    
     if (!provider) {
       return res.status(400).json({ 
         error: { 
@@ -116,11 +129,16 @@ router.post("/chat/completions", async (req, res) => {
       toolsDebug: tools ? JSON.stringify(tools).substring(0, 500) : 'none'
     });
 
-    let result;
+    console.log("🔍 DEBUG: About to call vertexService");
 
     // Route to appropriate service - all models use Vertex AI as unified gateway
-    result = await vertexService.generateChatCompletion({
+    const result = await vertexService.generateChatCompletion({
       model, messages, temperature, max_tokens, top_p, top_k, stream, tools, tool_choice
+    });
+
+    console.log("🔍 DEBUG: VertexService returned:", {
+      hasResult: !!result,
+      isStream: result?.isStream
     });
 
     // Handle streaming response

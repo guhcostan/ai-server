@@ -4,6 +4,15 @@ import { getActualModelName, getModelProvider, supportsStreaming } from '../conf
 import { processMessagesForVertexAI, processMessagesForThirdParty } from '../utils/messageUtils.js';
 
 class VertexService {
+  constructor() {
+    // Tool rotation state for Continue Agent Mode
+    this.toolRotationState = {
+      lastUsedToolIndex: -1,
+      conversationId: null,
+      toolUsageHistory: []
+    };
+  }
+
   async generateChatCompletion(params) {
     const { 
       model, 
@@ -60,7 +69,15 @@ class VertexService {
 
     // Add tools if provided
     if (tools && tools.length > 0) {
-      modelConfig.tools = this.convertOpenAIToolsToVertex(tools);
+      const vertexTools = this.convertOpenAIToolsToVertex(tools);
+      if (vertexTools && vertexTools.functionDeclarations) {
+        modelConfig.tools = [vertexTools];
+        
+        console.log('🔧 Added tools to Vertex request:', {
+          toolCount: vertexTools.functionDeclarations.length,
+          toolNames: vertexTools.functionDeclarations.map(f => f.name)
+        });
+      }
       
       // Handle tool_choice
       if (tool_choice) {
@@ -92,10 +109,44 @@ class VertexService {
       firstContent: contents[0] ? JSON.stringify(contents[0]).substring(0, 200) : 'none'
     });
 
-    if (stream && supportsStreaming(model)) {
-      return await this.generateStreamingResponse(generativeModel, contents, model, 'google');
-    } else {
-      return await this.generateNonStreamingResponse(generativeModel, contents, model, 'google');
+    try {
+      if (stream && supportsStreaming(model)) {
+        return await this.generateStreamingResponse(generativeModel, contents, model, 'google');
+      } else {
+        return await this.generateNonStreamingResponse(generativeModel, contents, model, 'google');
+      }
+    } catch (error) {
+      // Check if error is related to multiple tools and implement fallback
+      if (error.message && error.message.includes('Multiple tools are supported only when they are all search tools')) {
+        logger.warn('Multiple tools error detected, falling back to single tool strategy', {
+          originalToolCount: tools ? tools.length : 0,
+          error: error.message
+        });
+        
+        // Fallback: Use only the first tool
+        if (tools && tools.length > 0) {
+          const fallbackTools = this.convertOpenAIToolsToVertexFallback(tools);
+          if (fallbackTools && fallbackTools.functionDeclarations) {
+            modelConfig.tools = [fallbackTools];
+            
+            console.log('🔄 Fallback: Using single tool strategy:', {
+              toolCount: fallbackTools.functionDeclarations.length,
+              toolNames: fallbackTools.functionDeclarations.map(f => f.name)
+            });
+            
+            const fallbackModel = vertexAI.preview.getGenerativeModel(modelConfig);
+            
+            if (stream && supportsStreaming(model)) {
+              return await this.generateStreamingResponse(fallbackModel, contents, model, 'google');
+            } else {
+              return await this.generateNonStreamingResponse(fallbackModel, contents, model, 'google');
+            }
+          }
+        }
+      }
+      
+      // Re-throw the error if fallback doesn't apply
+      throw error;
     }
   }
 
@@ -142,26 +193,109 @@ class VertexService {
   }
 
   convertOpenAIToolsToVertex(tools) {
-    const converted = tools.map(tool => {
+    if (!tools || !Array.isArray(tools) || tools.length === 0) {
+      return null;
+    }
+
+    // Extract all function declarations from the tools array
+    const functionDeclarations = [];
+    
+    for (const tool of tools) {
       if (tool.type === 'function') {
-        return {
-          functionDeclarations: [{
-            name: tool.function.name,
-            description: tool.function.description || '',
-            parameters: tool.function.parameters || {}
-          }]
-        };
+        const func = tool.function;
+        
+        functionDeclarations.push({
+          name: func.name,
+          description: func.description || '',
+          parameters: func.parameters || {}
+        });
       }
-      return tool;
+    }
+    
+    if (functionDeclarations.length === 0) {
+      return null;
+    }
+    
+    console.log('🔧 Converting OpenAI tools to Vertex format:', {
+      totalTools: tools.length,
+      functionDeclarations: functionDeclarations.length,
+      functionNames: functionDeclarations.map(f => f.name)
     });
     
-    logger.info('Converting OpenAI tools to Vertex format', {
-      originalTools: JSON.stringify(tools).substring(0, 300),
-      convertedTools: JSON.stringify(converted).substring(0, 300),
-      toolCount: tools.length
-    });
+    // Return all function declarations - Vertex AI should handle multiple functions
+    return {
+      functionDeclarations: functionDeclarations
+    };
+  }
+
+  convertOpenAIToolsToVertexFallback(tools) {
+    if (!tools || !Array.isArray(tools) || tools.length === 0) {
+      return null;
+    }
+
+    // Smart tool selection with rotation for Continue Agent Mode
+    let selectedTool = tools[0]; // Default to first tool
     
-    return converted;
+    // Priority list for Continue Agent Mode tools
+    const toolPriorities = [
+      'builtin_read_file',
+      'builtin_edit_existing_file', 
+      'builtin_create_new_file',
+      'builtin_list_directory',
+      'builtin_search_files',
+      'builtin_run_terminal_command'
+    ];
+    
+    // Tool rotation logic: cycle through available tools
+    if (tools.length > 1) {
+      this.toolRotationState.lastUsedToolIndex = 
+        (this.toolRotationState.lastUsedToolIndex + 1) % tools.length;
+      selectedTool = tools[this.toolRotationState.lastUsedToolIndex];
+      
+      // Track tool usage
+      this.toolRotationState.toolUsageHistory.push({
+        toolName: selectedTool.function?.name,
+        timestamp: Date.now()
+      });
+      
+      // Keep only last 10 entries
+      if (this.toolRotationState.toolUsageHistory.length > 10) {
+        this.toolRotationState.toolUsageHistory.shift();
+      }
+    } else {
+      // Single tool or priority-based selection
+      for (const priority of toolPriorities) {
+        const foundTool = tools.find(tool => 
+          tool.type === 'function' && tool.function.name === priority
+        );
+        if (foundTool) {
+          selectedTool = foundTool;
+          break;
+        }
+      }
+    }
+    
+    if (selectedTool.type === 'function') {
+      const func = selectedTool.function;
+      
+      console.log('🔄 Smart Tool Rotation:', {
+        selectedTool: func.name,
+        rotationIndex: this.toolRotationState.lastUsedToolIndex,
+        totalTools: tools.length,
+        availableTools: tools.map(t => t.function?.name).filter(Boolean),
+        recentUsage: this.toolRotationState.toolUsageHistory.slice(-3).map(h => h.toolName)
+      });
+      
+      return {
+        functionDeclarations: [{
+          name: func.name,
+          description: func.description || '',
+          parameters: func.parameters || {}
+        }]
+      };
+    }
+    
+    return null;
   }
 
   buildThirdPartyRequest({ provider, messages, temperature, max_tokens, stream, tools, tool_choice }) {
@@ -172,19 +306,20 @@ class VertexService {
 
     // Add tools if supported by provider
     if (tools && tools.length > 0) {
-      switch (provider) {
-        case 'anthropic':
-          baseRequest.tools = tools;
-          if (tool_choice) {
-            baseRequest.tool_choice = tool_choice;
-          }
-          break;
-        // Other providers may not support tools yet
+      const vertexTools = this.convertOpenAIToolsToVertex(tools);
+      if (vertexTools && vertexTools.functionDeclarations) {
+        baseRequest.tools = [vertexTools];
+        
+        console.log('🔧 Added tools to Vertex request:', {
+          toolCount: vertexTools.functionDeclarations.length,
+          toolNames: vertexTools.functionDeclarations.map(f => f.name)
+        });
       }
     }
 
     switch (provider) {
       case 'anthropic':
+        baseRequest.tool_choice = tool_choice;
         return {
           anthropic_version: "bedrock-2023-05-31",
           messages: messages,
